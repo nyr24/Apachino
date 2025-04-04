@@ -1,3 +1,5 @@
 todo.md
 .zig-cache
 zig-out
+res
+apachino-conf.json
