@@ -25,7 +25,7 @@ pub fn read_request(conn: Connection) RequestError!Request {
 
 pub const RequestError = error{MethodNotSupported} || anyerror;
 
-const Method = enum {
+pub const Method = enum {
     GET,
     POST,
     OPTIONS,
