@@ -8,18 +8,39 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const allocator = gpa.allocator();
 
 // entry point of request creation
-pub fn read_request(conn: Connection) !Request {
+pub fn read_request(conn: Connection) RequestError!Request {
     var parser = try RequestParser.init();
+    defer parser.deinit();
 
     const reader = conn.stream.reader();
     _ = try reader.read(parser.buffer[0..]);
 
-    return parser.parse_request();
+    const request = parser.parse_request();
+    if (!request.method.is_supported()) {
+        return RequestError.MethodNotSupported;
+    }
+
+    return request;
 }
+
+pub const RequestError = error{MethodNotSupported} || anyerror;
 
 const Method = enum {
     GET,
     POST,
+    OPTIONS,
+    PATCH,
+    OTHER,
+
+    fn is_supported(self: Method) bool {
+        switch (self) {
+            .GET => return true,
+            .POST => return true,
+            .OPTIONS => return false,
+            .PATCH => return false,
+            .OTHER => return false,
+        }
+    }
 };
 
 const MethodMap = StaticStringMap(Method).initComptime(.{
@@ -32,7 +53,7 @@ pub const Request = struct {
     url: []const u8 = undefined,
     http_version: [2]u8 = [2]u8{ 1, 1 },
 
-    pub fn init() !Request {
+    pub fn init() Request {
         return Request{};
     }
 };
@@ -55,7 +76,7 @@ pub const RequestParser = struct {
         var tokenFnTable: [1]TokenFnMap = undefined;
 
         for (0..tokenFnTable.len) |i| {
-            var map = TokenFnMap.init(allocator);
+            var map = std.AutoHashMap(u8, *const TokenFn).init(allocator);
             try fill_map_for_line_n(i, &map);
             tokenFnTable[i] = map;
         }
@@ -66,14 +87,26 @@ pub const RequestParser = struct {
         };
     }
 
-    pub fn parse_request(self: *RequestParser) !Request {
-        var request = try Request.init();
+    pub fn deinit(self: *RequestParser) void {
+        for (0..self.tokenFnTable.len) |i| {
+            self.tokenFnTable[i].deinit();
+        }
+    }
 
-        self.skip_ws();
+    pub fn parse_request(self: *RequestParser) Request {
+        var request = Request.init();
+
+        _ = self.skip_ws();
 
         for (0..self.tokenFnTable.len) |i| {
             _ = i;
             if (self.curr_ind < self.buffer.len) {
+                if (self.tokenFnTable[self.curr_line_n].count() == 0) {
+                    const end_reached = self.skip_curr_line();
+                    if (end_reached) {
+                        break;
+                    }
+                }
                 self.parse_line_and_operate_on_tokens(&request);
                 self.curr_line_n += 1;
             }
@@ -123,12 +156,23 @@ pub const RequestParser = struct {
         }
     }
 
-    inline fn skip_ws(self: *RequestParser) void {
+    // returns true if buffer end reached
+    inline fn skip_ws(self: *RequestParser) bool {
         while (self.curr_ind < self.buffer.len and std.ascii.isWhitespace(self.buffer[self.curr_ind])) : (self.curr_ind += 1) {
             if (self.buffer[self.curr_ind] == '\n') {
                 self.curr_line_n += 1;
             }
         }
+
+        return self.curr_ind >= self.buffer.len;
+    }
+
+    // returns true if buffer end reached
+    inline fn skip_curr_line(self: *RequestParser) bool {
+        while (self.curr_ind < self.buffer.len and self.buffer[self.curr_ind] != '\n') : (self.curr_ind += 1) {}
+        self.curr_ind += 1;
+
+        return self.curr_ind >= self.buffer.len;
     }
 };
 
