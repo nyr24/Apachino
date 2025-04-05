@@ -1,6 +1,6 @@
 const std = @import("std");
 const stdout = std.io.getStdOut().writer();
-const SocketConf = @import("config.zig");
+const SocketConf = @import("server_conf.zig");
 const Request = @import("request.zig");
 const RequestError = Request.RequestError;
 

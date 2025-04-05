@@ -1,0 +1,19 @@
+{
+    "ip": "127.0.0.1",
+    "port": 8080,
+    "routes": [
+        {
+            "url": "/",
+            "methods": [
+                "GET"
+            ],
+            "resource_path": "index.html"
+        },
+        {
+            "url": "/reviews",
+            "methods": [
+                "POST"
+            ]
+        }
+    ]
+}
