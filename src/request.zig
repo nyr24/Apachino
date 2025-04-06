@@ -15,6 +15,9 @@ pub fn read_request(conn: Connection) RequestError!Request {
     const reader = conn.stream.reader();
     _ = try reader.read(parser.buffer[0..]);
 
+    // NOTE: debug
+    std.debug.print("Request contents:\n{s}\n", .{parser.buffer});
+
     const request = parser.parse_request();
     if (!request.method.is_supported()) {
         return RequestError.MethodNotSupported;

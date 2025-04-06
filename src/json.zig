@@ -1,22 +1,51 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
+const HashMap = std.StringHashMap;
 const stderr = std.io.getStdErr().writer();
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+const allocator = gpa.allocator();
 
 const ServerConfMod = @import("server_conf.zig");
 const ServerConf = ServerConfMod.ServerConf;
 const RouteConf = ServerConfMod.RouteConf;
 const RequestMethod = @import("request.zig").Method;
 
-// entry point for json parsing
-pub fn parse_config(contents: []u8) ServerConf {
-    const conf_parser = ConfigParser.init(contents);
-    return conf_parser.parse();
+// entry point for config parsing
+pub fn parse_config(contents: []u8) !void {
+    var conf_parser = JsonParser.init(contents);
+    _ = try conf_parser.parse();
 }
 
-const ParseConfigErr = error{
-    RouteNotFullyDefined,
-    ConfigEndReachedEarly,
+const JsonField = []const u8;
+const JsonValueTag = enum {
+    String,
+    Number,
+    Bool,
+    Table,
+    Array,
+    Null,
+    Undefined,
 };
+
+const JsonBoolLiteral = enum {
+    True,
+    False,
+};
+
+const JsonValue = union(JsonValueTag) {
+    String: []const u8,
+    Number: i32,
+    Bool: bool,
+    Table: JsonTable,
+    Array: JsonArray,
+    Null: u8,
+    Undefined: u8,
+};
+
+const JsonTable = HashMap(JsonValue);
+const JsonArray = ArrayList(JsonValue);
+
+const JsonParsedRepr = JsonTable;
 
 const Expectable = struct {
     contents: []const u8,
@@ -30,109 +59,395 @@ const Expectable = struct {
     }
 };
 
-const ConfigParser = struct {
+const ConfigParseErr = error{
+    RouteNotFullyDefined,
+    ConfigEndReachedEarly,
+};
+
+const JsonParseErr = ConfigParseErr;
+
+const JsonParser = struct {
     buffer: []u8,
     curr_ind: usize = 0,
     curr_line_n: usize = 0,
-    end_reached: bool = false,
-    route_expectables: comptime[3]Expectable = [3]Expectable{
-        Expectable.init("url", true),
-        Expectable.init("method", true),
-        Expectable.init("resource_path", true),
-    },
 
-    pub fn init(buffer: []u8) ConfigParser {
-        return ConfigParser{ .buffer = buffer };
+    pub fn init(buffer: []u8) JsonParser {
+        return JsonParser{ .buffer = buffer };
     }
 
-    pub fn parse(self: ConfigParser) ParseConfigErr!ServerConf {
-        var server_conf = ServerConf.init();
+    pub fn parse(self: *JsonParser) JsonParseErr!JsonParsedRepr {
+        self.skip_ws(true);
+        if (!self.check_curr_ch('{')) {
+            self.throw_unexpected_token("expected a '{' symbol at configuration file");
+        }
+        self.skip_ws(true);
 
-        self.expect_and_advance(Expectable.init("{"), true);
-        self.expect_and_advance(Expectable.init("routes"), true);
-        self.expect_and_advance(Expectable.init(":"), true);
-        self.expect_and_advance(Expectable.init("["), true);
+        const json_parsed = self.parse_json_table();
+        switch (json_parsed) {
+            .Table => |json_parsed_| {
+                // std.debug.print("{any}", json_parsed_);
+                // const it = json_parsed_.iterator();
+                // while (true) {
+                //     const entry = it.next();
+                //     if (entry) |entry_| {
+                //         std.debug.print("{any} \n", .{entry_});
+                //     } else {
+                //         break;
+                //     }
+                // }
+                if (self.is_end_reached()) {
+                    return json_parsed_;
+                } else {
+                    return JsonParseErr.ConfigEndReachedEarly;
+                }
+            },
+            else => unreachable,
+        }
 
-        self.parse_routes_arr();
+        return JsonParseErr.ConfigEndReachedEarly;
+    }
 
-        self.expect_and_advance(Expectable.init("]"), true);
-        self.expect_and_advance(Expectable.init("}"), true);
+    fn parse_json_value(self: *JsonParser) JsonValue {
+        if (self.check_curr_ch(',')) {
+            self.advance();
+        }
+        self.skip_ws(true);
 
-        if (self.end_reached) {
-            return server_conf;
-        } else {
-            return error.ConfigEndReachedEarly;
+        switch (self.get_curr_ch()) {
+            '{' => {
+                return self.parse_json_table();
+            },
+            '[' => {
+                return self.parse_json_arr();
+            },
+            '"' => {
+                return self.parse_json_string();
+            },
+            else => {
+                const ch = self.get_curr_ch();
+                if (std.ascii.isDigit(ch)) {
+                    return self.parse_json_number();
+                } else if (JsonParser.is_bool_start(ch)) {
+                    if (ch == 't') {
+                        const bool_val = self.parse_json_bool(.True);
+                        if (bool_val) |non_null| {
+                            return non_null;
+                        } else {
+                            self.throw_unexpected_token("maybe you mean true?");
+                        }
+                    } else {
+                        const bool_val = self.parse_json_bool(.False);
+                        if (bool_val) |non_null| {
+                            return non_null;
+                        } else {
+                            self.throw_unexpected_token("maybe you mean false?");
+                        }
+                    }
+                } else if (JsonParser.is_null_start(ch)) {
+                    const null_val = self.parse_json_null();
+                    if (null_val) |truly_null| {
+                        return truly_null;
+                    } else {
+                        self.throw_unexpected_token("maybe you mean null?");
+                    }
+                } else if (JsonParser.is_undefined_start(ch)) {
+                    const undef_val = self.parse_json_undefined();
+                    if (undef_val) |truly_undef| {
+                        return truly_undef;
+                    } else {
+                        self.throw_unexpected_token("maybe you mean undefined?");
+                    }
+                }
+            },
+        }
+
+        unreachable;
+    }
+
+    fn parse_json_table(self: *JsonParser) JsonValue {
+        self.advance();
+
+        var json_table = JsonValue{ .Table = JsonTable.init(allocator) };
+
+        while (true) {
+            self.skip_ws(true);
+            const json_field = self.parse_json_field();
+            const json_val = self.parse_json_value();
+
+            switch (json_table) {
+                .Table => |*_json_table| {
+                    _json_table.*.put(json_field, json_val) catch unreachable;
+                },
+                else => unreachable,
+            }
+
+            self.skip_ws(true);
+            if (self.check_curr_ch(',')) {
+                self.advance();
+            } else if (self.check_curr_ch('}')) {
+                return json_table;
+            } else if (self.is_end_reached()) {
+                self.throw_end_reached_early("json table was not terminated, expected '}'");
+            }
         }
     }
 
-    fn parse_routes_arr() {
-        // TODO:
+    fn parse_json_field(self: *JsonParser) JsonField {
+        self.skip_ws(true);
+        if (!self.check_curr_ch('"')) {
+            self.throw_unexpected_token(null);
+        }
+        self.advance();
+
+        const str_start: usize = self.curr_ind;
+        self.match_any_until('"', true);
+        self.advance();
+
+        if (self.is_end_reached()) {
+            self.throw_end_reached_early(null);
+        }
+
+        self.skip_ws(true);
+        const is_two_dots = self.check_curr_ch(':');
+        if (!is_two_dots) {
+            self.throw_unexpected_token("expected ':' after field declaration");
+        }
+        self.advance();
+
+        const field: []const u8 = self.buffer[str_start..self.curr_ind];
+
+        return field;
     }
 
-    fn parse_route(self: ConfigParser) ParseConfigErr!RouteConf {
-        var route = RouteConf.init();
+    fn parse_json_arr(self: *JsonParser) JsonValue {
+        self.advance();
+        var json_arr = JsonValue{ .Array = JsonArray.initCapacity(allocator, 5) catch unreachable };
 
-        self.expect_and_advance(Expectable.init("{"), true);
-        self.expect_and_advance(Expectable.init("}"), true);
+        while (true) {
+            self.skip_ws(true);
+            const json_val = self.parse_json_value();
 
-        if (self.validate_parsed_route(route)) {
-            return route;
-        } else {
-            return error.RouteNotFullyDefined;
+            switch (json_arr) {
+                .Array => |*json_arr_| {
+                    json_arr_.*.append(json_val) catch unreachable;
+                },
+                else => unreachable,
+            }
+
+            self.skip_ws(true);
+            if (self.check_curr_ch(',')) {
+                self.advance();
+            } else if (self.check_curr_ch(']')) {
+                return json_arr;
+            } else if (self.is_end_reached()) {
+                self.throw_end_reached_early(null);
+            }
         }
     }
 
-    fn validate_parsed_route(self: ConfigParser, route: RouteConf) bool {
-        return route.method != undefined and route.url != undefined;
+    fn parse_json_number(self: *JsonParser) JsonValue {
+        const start_ind = self.curr_ind;
+        self.match_any_for_callback(std.ascii.isDigit, true);
+        if (std.fmt.parseInt(i32, self.buffer[start_ind..self.curr_ind], 10)) |parsed_number| {
+            self.advance();
+            return JsonValue{ .Number = parsed_number };
+        } else |err| {
+            switch (err) {
+                error.Overflow => {
+                    std.debug.print("Overflow, when trying to parse integer: {s}", .{self.buffer[start_ind..self.curr_ind]});
+                    std.process.exit(1);
+                },
+                error.InvalidCharacter => {
+                    self.throw_unexpected_token("expected a value of Number type");
+                },
+                else => unreachable,
+            }
+        }
     }
 
-    fn expect_one_of(self: *ConfigParser, expectables: []const Expectable) {
+    fn parse_json_bool(self: *JsonParser, bool_val: JsonBoolLiteral) ?JsonValue {
+        switch (bool_val) {
+            .True => {
+                const match = self.match_expected_seq(Expectable.init("true", true), true, true);
+                if (match != null) {
+                    self.advance();
+                    return JsonValue{ .Bool = true };
+                } else {
+                    return null;
+                }
+            },
+            .False => {
+                const match = self.match_expected_seq(Expectable.init("false", true), true, true);
+                if (match != null) {
+                    self.advance();
+                    return JsonValue{ .Bool = false };
+                } else {
+                    return null;
+                }
+            },
+        }
+    }
+
+    fn parse_json_null(self: *JsonParser) ?JsonValue {
+        const null_parsed = self.match_expected_seq(Expectable.init("null", true), true, true);
+        if (null_parsed != null) {
+            self.advance();
+            return JsonValue{ .Null = 0 };
+        } else {
+            return null;
+        }
+    }
+
+    fn parse_json_undefined(self: *JsonParser) ?JsonValue {
+        const undef_parsed = self.match_expected_seq(Expectable.init("undefined", true), true, true);
+        if (undef_parsed != null) {
+            self.advance();
+            return JsonValue{ .Undefined = 0 };
+        } else {
+            return null;
+        }
+    }
+
+    fn parse_json_string(self: *JsonParser) JsonValue {
+        const str_start: usize = self.curr_ind;
+        self.match_any_until('\\', true);
+        self.advance();
+
+        if (self.is_end_reached()) {
+            self.throw_end_reached_early(null);
+        }
+
+        const slice: []const u8 = self.buffer[str_start..self.curr_ind];
+        const json_val: JsonValue = .{ .String = slice };
+
+        if (!self.check_curr_ch('"')) {
+            self.throw_end_reached_early(null);
+        }
+        self.advance();
+
+        return json_val;
+    }
+
+    fn match_expected_seq_mult(self: *JsonParser, expectables: []const Expectable) void {
         for (expectables) |expectable| {
-            self.expect_and_advance(expectable, true);
+            self.match_expected_seq(expectable, true);
         }
     }
 
-    fn expect_and_advance(self: *ConfigParser, expectable: Expectable, skip_ws_before: bool) void {
+    fn match_expected_seq(self: *JsonParser, expectable: Expectable, skip_ws_before: bool, throw_if_end_reached: bool) ?[]const u8 {
         if (skip_ws_before) {
-            self.skip_ws();
+            self.skip_ws(true);
         }
 
         const start_ind = self.curr_ind;
         var expected_ind: usize = 0;
 
-        while (self.curr_ind < self.buffer.len and expected_ind < expectable.contents.len and self.buffer[self.curr_ind] == expectable.contents[expected_ind]) {
-            self.curr_ind += 1;
+        while (self.curr_ind < self.buffer.len and expected_ind < expectable.contents.len and self.get_curr_ch() == expectable.contents[expected_ind]) {
+            self.advance();
             expected_ind += 1;
         }
 
         if (expected_ind == expectable.contents.len) {
             // success
-            return;
+            return self.buffer[start_ind..self.curr_ind];
         } else {
-            if (self.curr_ind >= self.buffer.len) {
-                self.end_reached = true;
-                stderr.print("End of config is reached early, line {d}, expected {s}", .{ self.curr_line_n, expected }) catch unreachable;
-                std.process.exit(1);
+            if (self.is_end_reached() and throw_if_end_reached) {
+                self.curr_ind = start_ind;
+                self.throw_end_reached_early(expectable.contents[0..]);
             } else {
                 self.curr_ind = start_ind;
                 if (!expectable.is_optional) {
-                    stderr.print("Unexpected token at line {d}, expected: {s}", .{ self.curr_line_n, expected }) catch unreachable;
-                    std.process.exit(1);
+                    self.throw_unexpected_token(expectable.contents[0..]);
                 }
+                return null;
             }
         }
     }
 
     // returns true if buffer end reached
-    inline fn skip_ws(self: *ConfigParser) void {
-        while (self.curr_ind < self.buffer.len and std.ascii.isWhitespace(self.buffer[self.curr_ind])) : (self.curr_ind += 1) {
-            if (self.buffer[self.curr_ind] == '\n') {
+    inline fn skip_ws(self: *JsonParser, throw_if_end_reached: bool) void {
+        while (self.curr_ind < self.buffer.len and (std.ascii.isWhitespace(self.get_curr_ch()) or self.check_curr_ch('/'))) : (self.advance()) {
+            if (self.get_curr_ch() == '\n') {
                 self.curr_line_n += 1;
             }
         }
 
-        if (self.curr_ind >= self.buffer.len) {
-            self.end_reached = true;
+        if (self.is_end_reached() and throw_if_end_reached) {
+            self.throw_end_reached_early(null);
         }
+    }
+
+    inline fn match_any_until(self: *JsonParser, until_ch: u8, throw_if_end_reached: bool) void {
+        while (self.curr_ind < self.buffer.len and self.get_curr_ch() != until_ch) : (self.advance()) {
+            if (self.get_curr_ch() == '\n') {
+                self.curr_line_n += 1;
+            }
+        }
+
+        if (self.is_end_reached() and throw_if_end_reached) {
+            self.throw_end_reached_early(null);
+        }
+    }
+
+    inline fn match_any_for_callback(self: *JsonParser, callback: *const fn (u8) bool, throw_if_end_reached: bool) void {
+        while (self.curr_ind < self.buffer.len and callback(self.get_curr_ch())) : (self.advance()) {
+            if (self.get_curr_ch() == '\n') {
+                self.curr_line_n += 1;
+            }
+        }
+
+        if (self.is_end_reached() and throw_if_end_reached) {
+            self.throw_end_reached_early(null);
+        }
+    }
+
+    inline fn is_bool_start(ch: u8) bool {
+        return ch == 't' or ch == 'f';
+    }
+
+    inline fn is_null_start(ch: u8) bool {
+        return ch == 'n';
+    }
+
+    inline fn is_undefined_start(ch: u8) bool {
+        return ch == 'u';
+    }
+
+    inline fn get_curr_ch(self: JsonParser) u8 {
+        return self.buffer[self.curr_ind];
+    }
+
+    inline fn check_curr_ch(self: JsonParser, ch: u8) bool {
+        return self.buffer[self.curr_ind] == ch;
+    }
+
+    inline fn advance(self: *JsonParser) void {
+        self.curr_ind += 1;
+    }
+
+    inline fn is_end_reached(self: JsonParser) bool {
+        return self.curr_ind >= self.buffer.len;
+    }
+
+    inline fn throw_end_reached_early(self: JsonParser, expect_message: ?[]const u8) void {
+        if (expect_message) |expect_message_no_null| {
+            stderr.print("End of config is reached early, line {d},\n\t{s}", .{ self.curr_line_n, expect_message_no_null }) catch unreachable;
+        } else {
+            stderr.print("End of config is reached early, line {d}", .{self.curr_line_n}) catch unreachable;
+        }
+        std.process.exit(1);
+    }
+
+    inline fn throw_unexpected_token(self: *JsonParser, expect_message: ?[]const u8) void {
+        const start_ind = self.curr_ind;
+        self.match_any_for_callback(std.ascii.isAlphanumeric, false);
+        const unexpected_seq: []const u8 = self.buffer[start_ind..self.curr_ind];
+
+        if (expect_message) |expect_message_no_null| {
+            stderr.print("Unexpected token at line {d}: {s},\n\t{s}", .{ self.curr_line_n, unexpected_seq, expect_message_no_null }) catch unreachable;
+        } else {
+            stderr.print("Unexpected token at line {d}: {s}", .{ self.curr_line_n, unexpected_seq }) catch unreachable;
+        }
+        std.process.exit(1);
     }
 };

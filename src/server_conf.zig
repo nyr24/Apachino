@@ -10,6 +10,8 @@ const net = @import("std").net;
 const localhost = [4]u8{ 127, 0, 0, 1 };
 const port: u16 = 8080;
 
+pub const PATH_TO_CONFIG = "apachino-conf.json";
+
 pub const Socket = struct {
     _address: net.Address,
     _stream: net.Stream,
