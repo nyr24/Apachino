@@ -77,24 +77,15 @@ const JsonParser = struct {
 
     pub fn parse(self: *JsonParser) JsonParseErr!JsonParsedRepr {
         self.skip_ws(true);
-        if (!self.check_curr_ch('{')) {
-            self.throw_unexpected_token("expected a '{' symbol at configuration file");
+        if (!self.check_curr_ch('{', true)) {
+            self.throw_unexpected_token("expected a '{' symbol as opening of json table");
         }
-        self.skip_ws(true);
 
         const json_parsed = self.parse_json_table();
+        self.skip_ws(false);
+
         switch (json_parsed) {
             .Table => |json_parsed_| {
-                // std.debug.print("{any}", json_parsed_);
-                // const it = json_parsed_.iterator();
-                // while (true) {
-                //     const entry = it.next();
-                //     if (entry) |entry_| {
-                //         std.debug.print("{any} \n", .{entry_});
-                //     } else {
-                //         break;
-                //     }
-                // }
                 if (self.is_end_reached()) {
                     return json_parsed_;
                 } else {
@@ -108,19 +99,18 @@ const JsonParser = struct {
     }
 
     fn parse_json_value(self: *JsonParser) JsonValue {
-        if (self.check_curr_ch(',')) {
-            self.advance();
-        }
         self.skip_ws(true);
 
         switch (self.get_curr_ch()) {
             '{' => {
+                self.advance();
                 return self.parse_json_table();
             },
             '[' => {
+                self.advance();
                 return self.parse_json_arr();
             },
-            '"' => {
+            '\"' => {
                 return self.parse_json_string();
             },
             else => {
@@ -165,12 +155,11 @@ const JsonParser = struct {
     }
 
     fn parse_json_table(self: *JsonParser) JsonValue {
-        self.advance();
-
         var json_table = JsonValue{ .Table = JsonTable.init(allocator) };
 
         while (true) {
             self.skip_ws(true);
+
             const json_field = self.parse_json_field();
             const json_val = self.parse_json_value();
 
@@ -182,9 +171,9 @@ const JsonParser = struct {
             }
 
             self.skip_ws(true);
-            if (self.check_curr_ch(',')) {
-                self.advance();
-            } else if (self.check_curr_ch('}')) {
+            if (self.check_curr_ch(',', true)) {
+                continue;
+            } else if (self.check_curr_ch('}', true)) {
                 return json_table;
             } else if (self.is_end_reached()) {
                 self.throw_end_reached_early("json table was not terminated, expected '}'");
@@ -192,35 +181,7 @@ const JsonParser = struct {
         }
     }
 
-    fn parse_json_field(self: *JsonParser) JsonField {
-        self.skip_ws(true);
-        if (!self.check_curr_ch('"')) {
-            self.throw_unexpected_token(null);
-        }
-        self.advance();
-
-        const str_start: usize = self.curr_ind;
-        self.match_any_until('"', true);
-        self.advance();
-
-        if (self.is_end_reached()) {
-            self.throw_end_reached_early(null);
-        }
-
-        self.skip_ws(true);
-        const is_two_dots = self.check_curr_ch(':');
-        if (!is_two_dots) {
-            self.throw_unexpected_token("expected ':' after field declaration");
-        }
-        self.advance();
-
-        const field: []const u8 = self.buffer[str_start..self.curr_ind];
-
-        return field;
-    }
-
     fn parse_json_arr(self: *JsonParser) JsonValue {
-        self.advance();
         var json_arr = JsonValue{ .Array = JsonArray.initCapacity(allocator, 5) catch unreachable };
 
         while (true) {
@@ -235,14 +196,51 @@ const JsonParser = struct {
             }
 
             self.skip_ws(true);
-            if (self.check_curr_ch(',')) {
-                self.advance();
-            } else if (self.check_curr_ch(']')) {
+            if (self.check_curr_ch(',', true)) {
+                continue;
+            } else if (self.check_curr_ch(']', true)) {
                 return json_arr;
             } else if (self.is_end_reached()) {
                 self.throw_end_reached_early(null);
             }
         }
+    }
+
+    fn parse_json_field(self: *JsonParser) JsonField {
+        const str_literal = self.parse_json_str_literal();
+        self.skip_ws(true);
+        if (!self.check_curr_ch(':', true)) {
+            self.throw_unexpected_token("expected ':' after field declaration");
+        }
+
+        return str_literal;
+    }
+
+    fn parse_json_string(self: *JsonParser) JsonValue {
+        const str_literal = self.parse_json_str_literal();
+        const json_val: JsonValue = .{ .String = str_literal };
+        return json_val;
+    }
+
+    fn parse_json_str_literal(self: *JsonParser) []const u8 {
+        if (!self.check_curr_ch('\"', true)) {
+            self.throw_unexpected_token(null);
+        }
+
+        const str_start: usize = self.curr_ind;
+        self.match_any_until('\"', true);
+
+        if (self.is_end_reached()) {
+            self.throw_end_reached_early(null);
+        }
+
+        const str: []const u8 = self.buffer[str_start..self.curr_ind];
+
+        if (!self.check_curr_ch('\"', true)) {
+            self.throw_unexpected_token("expected '\"' at the end of json string");
+        }
+
+        return str;
     }
 
     fn parse_json_number(self: *JsonParser) JsonValue {
@@ -308,26 +306,6 @@ const JsonParser = struct {
         }
     }
 
-    fn parse_json_string(self: *JsonParser) JsonValue {
-        const str_start: usize = self.curr_ind;
-        self.match_any_until('\\', true);
-        self.advance();
-
-        if (self.is_end_reached()) {
-            self.throw_end_reached_early(null);
-        }
-
-        const slice: []const u8 = self.buffer[str_start..self.curr_ind];
-        const json_val: JsonValue = .{ .String = slice };
-
-        if (!self.check_curr_ch('"')) {
-            self.throw_end_reached_early(null);
-        }
-        self.advance();
-
-        return json_val;
-    }
-
     fn match_expected_seq_mult(self: *JsonParser, expectables: []const Expectable) void {
         for (expectables) |expectable| {
             self.match_expected_seq(expectable, true);
@@ -366,7 +344,7 @@ const JsonParser = struct {
 
     // returns true if buffer end reached
     inline fn skip_ws(self: *JsonParser, throw_if_end_reached: bool) void {
-        while (self.curr_ind < self.buffer.len and (std.ascii.isWhitespace(self.get_curr_ch()) or self.check_curr_ch('/'))) : (self.advance()) {
+        while (self.curr_ind < self.buffer.len and (std.ascii.isWhitespace(self.get_curr_ch()) or self.check_curr_ch('/', false))) : (self.advance()) {
             if (self.get_curr_ch() == '\n') {
                 self.curr_line_n += 1;
             }
@@ -417,8 +395,12 @@ const JsonParser = struct {
         return self.buffer[self.curr_ind];
     }
 
-    inline fn check_curr_ch(self: JsonParser, ch: u8) bool {
-        return self.buffer[self.curr_ind] == ch;
+    inline fn check_curr_ch(self: *JsonParser, ch: u8, advance_if_success: bool) bool {
+        const success = self.get_curr_ch() == ch;
+        if (success and advance_if_success) {
+            self.advance();
+        }
+        return success;
     }
 
     inline fn advance(self: *JsonParser) void {
@@ -441,7 +423,7 @@ const JsonParser = struct {
     inline fn throw_unexpected_token(self: *JsonParser, expect_message: ?[]const u8) void {
         const start_ind = self.curr_ind;
         self.match_any_for_callback(std.ascii.isAlphanumeric, false);
-        const unexpected_seq: []const u8 = self.buffer[start_ind..self.curr_ind];
+        const unexpected_seq = self.buffer[start_ind..self.curr_ind];
 
         if (expect_message) |expect_message_no_null| {
             stderr.print("Unexpected token at line {d}: {s},\n\t{s}", .{ self.curr_line_n, unexpected_seq, expect_message_no_null }) catch unreachable;
@@ -449,5 +431,14 @@ const JsonParser = struct {
             stderr.print("Unexpected token at line {d}: {s}", .{ self.curr_line_n, unexpected_seq }) catch unreachable;
         }
         std.process.exit(1);
+    }
+
+    inline fn debug_print_curr(self: JsonParser) void {
+        std.debug.print("{c}\n", .{self.get_curr_ch()});
+    }
+
+    inline fn debug_print_seq(self: JsonParser, offset: usize) void {
+        const end_ind = self.curr_ind + offset;
+        std.debug.print("{s}\n", .{self.buffer[self.curr_ind..end_ind]});
     }
 };

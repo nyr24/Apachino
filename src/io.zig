@@ -1,6 +1,9 @@
 const std = @import("std");
 
-pub fn read_file(path_rel: []const u8, buffer: []u8) !void {
+pub fn read_file(allocator: std.mem.Allocator, path_rel: []const u8) ![]u8 {
     const cwd = std.fs.cwd();
-    _ = try cwd.readFile(path_rel, buffer);
+    const file_contents = try cwd.readFileAlloc(allocator, path_rel, 600);
+    errdefer allocator.free(file_contents);
+
+    return file_contents;
 }
