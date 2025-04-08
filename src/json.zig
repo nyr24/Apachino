@@ -5,19 +5,20 @@ const stderr = std.io.getStdErr().writer();
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const allocator = gpa.allocator();
 
-const ServerConfMod = @import("server_conf.zig");
-const ServerConf = ServerConfMod.ServerConf;
-const RouteConf = ServerConfMod.RouteConf;
+const server = @import("server_conf.zig");
+const ServerConf = server.ServerConf;
+const RouteConf = server.RouteConf;
 const RequestMethod = @import("request.zig").Method;
 
 // entry point for config parsing
-pub fn parse_config(contents: []u8) !void {
+pub fn parse_config(contents: []const u8) !JsonParsedRepr {
     var conf_parser = JsonParser.init(contents);
-    _ = try conf_parser.parse();
+    const parsed_json = try conf_parser.parse();
+    return parsed_json;
 }
 
 const JsonField = []const u8;
-const JsonValueTag = enum {
+pub const JsonValueTag = enum {
     String,
     Number,
     Bool,
@@ -25,6 +26,18 @@ const JsonValueTag = enum {
     Array,
     Null,
     Undefined,
+
+    pub fn to_str(self: JsonValueTag) []const u8 {
+        switch (self) {
+            .String => return "String",
+            .Number => return "Number",
+            .Bool => return "Bool",
+            .Table => return "Table",
+            .Array => return "Array",
+            .Null => return "Null",
+            .Undefined => return "Undefined",
+        }
+    }
 };
 
 const JsonBoolLiteral = enum {
@@ -32,7 +45,7 @@ const JsonBoolLiteral = enum {
     False,
 };
 
-const JsonValue = union(JsonValueTag) {
+pub const JsonValue = union(JsonValueTag) {
     String: []const u8,
     Number: i32,
     Bool: bool,
@@ -45,19 +58,7 @@ const JsonValue = union(JsonValueTag) {
 const JsonTable = HashMap(JsonValue);
 const JsonArray = ArrayList(JsonValue);
 
-const JsonParsedRepr = JsonTable;
-
-const Expectable = struct {
-    contents: []const u8,
-    is_optional: bool = false,
-
-    fn init(contents: []const u8, is_opt: bool) Expectable {
-        return Expectable{
-            .contents = contents,
-            .is_optional = is_opt,
-        };
-    }
-};
+pub const JsonParsedRepr = JsonTable;
 
 const ConfigParseErr = error{
     RouteNotFullyDefined,
@@ -67,11 +68,11 @@ const ConfigParseErr = error{
 const JsonParseErr = ConfigParseErr;
 
 const JsonParser = struct {
-    buffer: []u8,
+    buffer: []const u8,
     curr_ind: usize = 0,
     curr_line_n: usize = 0,
 
-    pub fn init(buffer: []u8) JsonParser {
+    pub fn init(buffer: []const u8) JsonParser {
         return JsonParser{ .buffer = buffer };
     }
 
@@ -266,7 +267,7 @@ const JsonParser = struct {
     fn parse_json_bool(self: *JsonParser, bool_val: JsonBoolLiteral) ?JsonValue {
         switch (bool_val) {
             .True => {
-                const match = self.match_expected_seq(Expectable.init("true", true), true, true);
+                const match = self.match_expected_seq("true", true, true, true);
                 if (match != null) {
                     self.advance();
                     return JsonValue{ .Bool = true };
@@ -275,7 +276,7 @@ const JsonParser = struct {
                 }
             },
             .False => {
-                const match = self.match_expected_seq(Expectable.init("false", true), true, true);
+                const match = self.match_expected_seq("false", true, true, true);
                 if (match != null) {
                     self.advance();
                     return JsonValue{ .Bool = false };
@@ -287,7 +288,7 @@ const JsonParser = struct {
     }
 
     fn parse_json_null(self: *JsonParser) ?JsonValue {
-        const null_parsed = self.match_expected_seq(Expectable.init("null", true), true, true);
+        const null_parsed = self.match_expected_seq("null", true, true, true);
         if (null_parsed != null) {
             self.advance();
             return JsonValue{ .Null = 0 };
@@ -297,7 +298,7 @@ const JsonParser = struct {
     }
 
     fn parse_json_undefined(self: *JsonParser) ?JsonValue {
-        const undef_parsed = self.match_expected_seq(Expectable.init("undefined", true), true, true);
+        const undef_parsed = self.match_expected_seq("undefined", true, true, true);
         if (undef_parsed != null) {
             self.advance();
             return JsonValue{ .Undefined = 0 };
@@ -306,13 +307,7 @@ const JsonParser = struct {
         }
     }
 
-    fn match_expected_seq_mult(self: *JsonParser, expectables: []const Expectable) void {
-        for (expectables) |expectable| {
-            self.match_expected_seq(expectable, true);
-        }
-    }
-
-    fn match_expected_seq(self: *JsonParser, expectable: Expectable, skip_ws_before: bool, throw_if_end_reached: bool) ?[]const u8 {
+    fn match_expected_seq(self: *JsonParser, expected_seq: []const u8, skip_ws_before: bool, throw_if_not_match: bool, throw_if_end_reached: bool) ?[]const u8 {
         if (skip_ws_before) {
             self.skip_ws(true);
         }
@@ -320,22 +315,22 @@ const JsonParser = struct {
         const start_ind = self.curr_ind;
         var expected_ind: usize = 0;
 
-        while (self.curr_ind < self.buffer.len and expected_ind < expectable.contents.len and self.get_curr_ch() == expectable.contents[expected_ind]) {
+        while (self.curr_ind < self.buffer.len and expected_ind < expected_seq.len and self.get_curr_ch() == expected_seq[expected_ind]) {
             self.advance();
             expected_ind += 1;
         }
 
-        if (expected_ind == expectable.contents.len) {
+        if (expected_ind == expected_seq.len) {
             // success
             return self.buffer[start_ind..self.curr_ind];
         } else {
             if (self.is_end_reached() and throw_if_end_reached) {
                 self.curr_ind = start_ind;
-                self.throw_end_reached_early(expectable.contents[0..]);
+                self.throw_end_reached_early(expected_seq);
             } else {
                 self.curr_ind = start_ind;
-                if (!expectable.is_optional) {
-                    self.throw_unexpected_token(expectable.contents[0..]);
+                if (throw_if_not_match) {
+                    self.throw_unexpected_token(expected_seq);
                 }
                 return null;
             }
