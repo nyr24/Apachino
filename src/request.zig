@@ -46,7 +46,7 @@ pub const Method = enum {
     }
 };
 
-const MethodMap = StaticStringMap(Method).initComptime(.{
+pub const MethodMap = StaticStringMap(Method).initComptime(.{
     .{ "GET", Method.GET },
     .{ "POST", Method.POST },
 });

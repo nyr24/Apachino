@@ -7,7 +7,7 @@
             "methods": [
                 "GET"
             ],
-            "resource_path": "index.html"
+            "resource_path": "res/index.html"
         },
         {
             "url": "/reviews",

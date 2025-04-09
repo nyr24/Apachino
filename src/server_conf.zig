@@ -3,7 +3,6 @@ const stderr = std.io.getStdErr().writer();
 const net = std.net;
 const ArrayList = std.ArrayList;
 const HashMap = std.StringHashMap;
-const RequestMethod = @import("request.zig").Method;
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const allocator = gpa.allocator();
 
@@ -14,6 +13,10 @@ const JsonValue = json.JsonValue;
 
 const request = @import("request.zig");
 const RequestError = request.RequestError;
+const RequestMethod = request.Method;
+const RequestMethodMap = request.MethodMap;
+
+const io = @import("io.zig");
 
 pub const PATH_TO_CONFIG = "apachino-conf.json";
 
@@ -36,13 +39,20 @@ pub const Socket = struct {
 pub const Route = struct {
     const MULT_ROUTES_JSON_EXAMPLE: []const u8 = "[{ \"url\": ..., methods: [\"GET\", ...], resource_path: \"path_to_index.html\"  }]";
     const SINGLE_ROUTE_JSON_EXAMPLE: []const u8 = "{ \"url\": ..., methods: [\"GET\", ...], resource_path: \"path_to_index.html\"  }";
+    const URL_JSON_EXAMPLE: []const u8 = "/page1";
+    const RESOURCE_PATH_JSON_EXAMPLE: []const u8 = "/path_to_index.html";
+    const METHODS_EXAMPLE: []const u8 = "[\"GET\", ...]";
 
     url: []const u8 = undefined,
-    method: RequestMethod = undefined,
+    methods: ArrayList(RequestMethod),
     resource_path: ?[]const u8 = null,
 
-    pub fn init() Route {
-        return Route{};
+    pub fn init() !Route {
+        return Route{ .methods = try ArrayList(RequestMethod).initCapacity(allocator, 3) };
+    }
+
+    pub fn deinit(self: Route) void {
+        self.methods.deinit();
     }
 };
 
@@ -53,15 +63,16 @@ pub const Server = struct {
     port: u16 = Server.DEFAULT_PORT,
     ip: [4]u8 = Server.DEFAULT_IP,
     socket: Socket = undefined,
-    routes: ArrayList(Route),
+    routes: HashMap(Route),
 
     pub fn init(config_file_contents: []const u8) !Server {
         const parsed_json = try json.parse_config(config_file_contents);
-        var server_conf = Server{ .routes = try ArrayList(Route).initCapacity(allocator, 5) };
+        var server_conf = Server{ .routes = HashMap(Route).init(allocator) };
 
         server_conf.ip = parse_ip(parsed_json);
         server_conf.port = parse_port(parsed_json);
         server_conf.socket = try Socket.init(server_conf);
+        try server_conf.parse_routes(parsed_json);
 
         return server_conf;
     }
@@ -69,7 +80,7 @@ pub const Server = struct {
     pub fn listen(self: Server) !void {
         var server = try self.socket.address.listen(.{});
         const connection = try server.accept();
-        _ = request.read_request(connection) catch |err| {
+        const request_res = request.read_request(connection) catch |err| {
             switch (err) {
                 RequestError.MethodNotSupported => {
                     try stderr.print("Request Method is not supported by server", .{});
@@ -81,6 +92,18 @@ pub const Server = struct {
                 },
             }
         };
+
+        // NOTE: temp
+        std.debug.print("request url: {s}\n", .{request_res.url});
+        if (self.routes.get(request_res.url)) |route| {
+            if (route.resource_path) |path_non_null| {
+                const file_contents = try io.read_file(allocator, path_non_null);
+                std.debug.print("response: {s}\n", .{file_contents});
+
+                const writer = connection.stream.writer();
+                _ = try writer.write(file_contents);
+            }
+        }
     }
 
     fn parse_ip(parsed_json: JsonParsedRepr) [4]u8 {
@@ -120,30 +143,50 @@ pub const Server = struct {
         return port_as_u16;
     }
 
-    fn parse_routes(self: *Server, parsed_json: JsonParsedRepr) void {
+    fn parse_routes(self: *Server, parsed_json: JsonParsedRepr) !void {
         const routes_arr = unwrap_json_val_arr(parsed_json.get("routes"), null, "routes", Route.MULT_ROUTES_JSON_EXAMPLE);
-        for (routes_arr) |route_as_json| {
-            self.routes.append(parse_route(route_as_json));
+        for (routes_arr.items) |route_as_json| {
+            try self.add_route(route_as_json);
         }
     }
 
-    fn parse_route(route_json_repr: JsonValue) Route {
-        var route = Route.init();
+    fn add_route(self: *Server, route_json_repr: JsonValue) !void {
+        var route = try Route.init();
         const route_as_table = unwrap_json_val_table(route_json_repr, null, "route", Route.SINGLE_ROUTE_JSON_EXAMPLE);
-        const route_url = unwrap_json_val_string(route_as_table.get("url"), null, "url", "/path_to_index.html");
-        const route_resource_path = unwrap_json_val_string(route_as_table.get("resource_path"), .{ .Null = 0 }, "resource_path", "/path_to_index.html");
-
-        // TODO: route methods
+        const route_url = unwrap_json_val_string(route_as_table.get("url"), null, "url", Route.URL_JSON_EXAMPLE);
+        const route_methods = unwrap_json_val_arr(route_as_table.get("methods"), null, "methods", Route.METHODS_EXAMPLE);
+        const route_resource_path_nullable = route_as_table.get("resource_path");
 
         route.url = route_url;
-        switch (route_resource_path) {
-            .String => |resource_path_str| {
-                route.resource_path = resource_path_str;
-            },
-            else => {},
+        if (route_resource_path_nullable) |route_resource_path| {
+            switch (route_resource_path) {
+                .String => |resource_path_str| {
+                    route.resource_path = resource_path_str;
+                },
+                else => route.resource_path = null,
+            }
+        } else {
+            route.resource_path = null;
         }
 
-        return route;
+        for (route_methods.items) |method_json| {
+            const route_method_nullable = parse_route_method(method_json);
+            if (route_method_nullable) |route_method| {
+                try route.methods.append(route_method);
+            }
+        }
+
+        try self.routes.put(route_url, route);
+    }
+
+    fn parse_route_method(method_json: JsonValue) ?RequestMethod {
+        const method_str = unwrap_json_val_string(method_json, null, "item of methods []", Route.METHODS_EXAMPLE);
+        if (RequestMethodMap.get(method_str)) |route_method| {
+            return route_method;
+        } else {
+            stderr.print("Configuration warning: Unknown request method: {s}", .{method_str}) catch unreachable;
+            return null;
+        }
     }
 
     fn unwrap_json_val(json_val_nullable: ?JsonValue, field_name: []const u8) JsonValue {
@@ -206,7 +249,6 @@ pub const Server = struct {
         } else {
             json_val = unwrap_json_val(json_val_nullable, field_name);
         }
-        json_val = unwrap_json_val(json_val_nullable, field_name);
         switch (json_val) {
             .Array => |json_val_arr| {
                 return json_val_arr;
@@ -225,7 +267,6 @@ pub const Server = struct {
         } else {
             json_val = unwrap_json_val(json_val_nullable, field_name);
         }
-        json_val = unwrap_json_val(json_val_nullable, field_name);
         switch (json_val) {
             .Table => |json_val_table| {
                 return json_val_table;
@@ -249,7 +290,11 @@ pub const Server = struct {
         std.process.exit(1);
     }
 
-    pub fn deinit(self: Server) void {
+    pub fn deinit(self: *Server) void {
+        var routes_iter = self.routes.valueIterator();
+        while (routes_iter.next()) |route| {
+            route.*.deinit();
+        }
         self.routes.deinit();
     }
 };

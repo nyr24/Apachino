@@ -9,8 +9,11 @@ const Server = server_mod.Server;
 
 pub fn main() !void {
     const config_file_contents = try io.read_file(allocator, server_mod.PATH_TO_CONFIG);
-    const server = try Server.init(config_file_contents[0..]);
-    try server.listen();
-
     defer allocator.free(config_file_contents);
+    var server = try Server.init(config_file_contents[0..]);
+    defer server.deinit();
+
+    while (true) {
+        try server.listen();
+    }
 }
