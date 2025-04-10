@@ -1,7 +1,6 @@
 const std = @import("std");
 const stdout = std.io.getStdOut().writer();
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const allocator = gpa.allocator();
+const allocator = @import("env.zig").allocator;
 
 const io = @import("io.zig");
 const server_mod = @import("server_conf.zig");

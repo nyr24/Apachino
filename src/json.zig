@@ -2,8 +2,7 @@ const std = @import("std");
 const ArrayList = std.ArrayList;
 const HashMap = std.StringHashMap;
 const stderr = std.io.getStdErr().writer();
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const allocator = gpa.allocator();
+const allocator = @import("env.zig").allocator;
 
 const server = @import("server_conf.zig");
 const ServerConf = server.ServerConf;

@@ -1,40 +1,28 @@
 const std = @import("std");
+const writer = std.io.GenericWriter(.{}, .{}, .{}){};
+const posix = std.posix;
 const stderr = std.io.getStdErr().writer();
-const net = std.net;
 const ArrayList = std.ArrayList;
 const HashMap = std.StringHashMap;
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const allocator = gpa.allocator();
+const allocator = @import("env.zig").allocator;
 
+const io = @import("io.zig");
 const json = @import("json.zig");
 const JsonParsedRepr = json.JsonParsedRepr;
 const JsonValueTag = json.JsonValueTag;
 const JsonValue = json.JsonValue;
-
 const request = @import("request.zig");
+const Request = request.Request;
 const RequestError = request.RequestError;
 const RequestMethod = request.Method;
 const RequestMethodMap = request.MethodMap;
-
-const io = @import("io.zig");
+const response = @import("response.zig");
+const Response = response.Response;
+const socket = @import("socket.zig");
+const Listener = socket.Listener;
+const Socket = socket.Socket;
 
 pub const PATH_TO_CONFIG = "apachino-conf.json";
-
-pub const Socket = struct {
-    address: net.Address,
-    stream: net.Stream,
-
-    pub fn init(server_conf: Server) !Socket {
-        const addr = net.Address.initIp4(server_conf.ip, server_conf.port);
-        const socket = try std.posix.socket(
-            addr.any.family,
-            std.posix.SOCK.STREAM,
-            std.posix.IPPROTO.TCP,
-        );
-        const stream = net.Stream{ .handle = socket };
-        return Socket{ .address = addr, .stream = stream };
-    }
-};
 
 pub const Route = struct {
     const MULT_ROUTES_JSON_EXAMPLE: []const u8 = "[{ \"url\": ..., methods: [\"GET\", ...], resource_path: \"path_to_index.html\"  }]";
@@ -44,14 +32,14 @@ pub const Route = struct {
     const METHODS_EXAMPLE: []const u8 = "[\"GET\", ...]";
 
     url: []const u8 = undefined,
-    methods: ArrayList(RequestMethod),
+    methods: HashMap(RequestMethod),
     resource_path: ?[]const u8 = null,
 
     pub fn init() !Route {
-        return Route{ .methods = try ArrayList(RequestMethod).initCapacity(allocator, 3) };
+        return Route{ .methods = HashMap(RequestMethod).init(allocator) };
     }
 
-    pub fn deinit(self: Route) void {
+    pub fn deinit(self: *Route) void {
         self.methods.deinit();
     }
 };
@@ -62,7 +50,7 @@ pub const Server = struct {
 
     port: u16 = Server.DEFAULT_PORT,
     ip: [4]u8 = Server.DEFAULT_IP,
-    socket: Socket = undefined,
+    socket_listener: Listener = undefined,
     routes: HashMap(Route),
 
     pub fn init(config_file_contents: []const u8) !Server {
@@ -71,37 +59,45 @@ pub const Server = struct {
 
         server_conf.ip = parse_ip(parsed_json);
         server_conf.port = parse_port(parsed_json);
-        server_conf.socket = try Socket.init(server_conf);
+        server_conf.socket_listener = try Listener.init(server_conf);
         try server_conf.parse_routes(parsed_json);
 
         return server_conf;
     }
 
     pub fn listen(self: Server) !void {
-        var server = try self.socket.address.listen(.{});
-        const connection = try server.accept();
-        const request_res = request.read_request(connection) catch |err| {
-            switch (err) {
-                RequestError.MethodNotSupported => {
-                    try stderr.print("Request Method is not supported by server", .{});
-                    std.process.exit(1);
-                },
-                else => {
-                    try stderr.print("Unexpected error occurs, finishing process", .{});
-                    std.process.exit(1);
-                },
-            }
-        };
+        try self.socket_listener.listen();
+        defer self.socket_listener.close();
 
-        // NOTE: temp
-        std.debug.print("request url: {s}\n", .{request_res.url});
-        if (self.routes.get(request_res.url)) |route| {
-            if (route.resource_path) |path_non_null| {
-                const file_contents = try io.read_file(allocator, path_non_null);
-                std.debug.print("response: {s}\n", .{file_contents});
+        while (true) {
+            if (Socket.accept(self.socket_listener)) |socket_acceptor| {
+                defer Socket.close(socket_acceptor);
 
-                const writer = connection.stream.writer();
-                _ = try writer.write(file_contents);
+                var request_contents: [1000]u8 = undefined;
+                _ = try Socket.read(socket_acceptor, request_contents[0..]);
+
+                const req = Request.init_from_raw_bytes(request_contents[0..]) catch |err| {
+                    switch (err) {
+                        RequestError.MethodNotSupported => {
+                            try stderr.print("Request Method is not supported by server", .{});
+                            std.process.exit(1);
+                        },
+                        else => {
+                            try stderr.print("Unexpected error occurs, finishing process", .{});
+                            std.process.exit(1);
+                        },
+                    }
+                };
+
+                const resp = try Response.init(req, self);
+                defer resp.deinit();
+
+                _ = try Socket.write(socket_acceptor, resp.headers.items);
+                if (resp.body) |resp_body| {
+                    _ = try Socket.write(socket_acceptor, resp_body);
+                }
+            } else {
+                continue;
             }
         }
     }
@@ -172,17 +168,17 @@ pub const Server = struct {
         for (route_methods.items) |method_json| {
             const route_method_nullable = parse_route_method(method_json);
             if (route_method_nullable) |route_method| {
-                try route.methods.append(route_method);
+                try route.methods.put(route_method, RequestMethodMap.get(route_method).?);
             }
         }
 
         try self.routes.put(route_url, route);
     }
 
-    fn parse_route_method(method_json: JsonValue) ?RequestMethod {
+    fn parse_route_method(method_json: JsonValue) ?[]const u8 {
         const method_str = unwrap_json_val_string(method_json, null, "item of methods []", Route.METHODS_EXAMPLE);
-        if (RequestMethodMap.get(method_str)) |route_method| {
-            return route_method;
+        if (RequestMethodMap.has(method_str)) {
+            return method_str;
         } else {
             stderr.print("Configuration warning: Unknown request method: {s}", .{method_str}) catch unreachable;
             return null;
