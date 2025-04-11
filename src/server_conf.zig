@@ -4,7 +4,8 @@ const posix = std.posix;
 const stderr = std.io.getStdErr().writer();
 const ArrayList = std.ArrayList;
 const HashMap = std.StringHashMap;
-const allocator = @import("env.zig").allocator;
+const env = @import("env.zig");
+const allocator = env.allocator;
 
 const io = @import("io.zig");
 const json = @import("json.zig");
@@ -21,8 +22,6 @@ const Response = response.Response;
 const socket = @import("socket.zig");
 const Listener = socket.Listener;
 const Socket = socket.Socket;
-
-pub const PATH_TO_CONFIG = "apachino-conf.json";
 
 pub const Route = struct {
     const MULT_ROUTES_JSON_EXAMPLE: []const u8 = "[{ \"url\": ..., methods: [\"GET\", ...], resource_path: \"path_to_index.html\"  }]";
@@ -72,9 +71,14 @@ pub const Server = struct {
         while (true) {
             if (Socket.accept(self.socket_listener)) |socket_acceptor| {
                 defer Socket.close(socket_acceptor);
+                Socket.set_read_timeout(socket_acceptor);
+                Socket.set_write_timeout(socket_acceptor);
 
                 var request_contents: [1000]u8 = undefined;
-                _ = try Socket.read(socket_acceptor, request_contents[0..]);
+                _ = Socket.read_all(socket_acceptor, request_contents[0..]) catch |err| {
+                    std.debug.print("Socket read error: {}\n", .{err});
+                    continue;
+                };
 
                 const req = Request.init_from_raw_bytes(request_contents[0..]) catch |err| {
                     switch (err) {
@@ -93,9 +97,15 @@ pub const Server = struct {
                 const resp = try Response.init(req, self);
                 defer resp.deinit();
 
-                _ = try Socket.write(socket_acceptor, resp.headers);
+                _ = Socket.write_all(socket_acceptor, resp.headers) catch |err| {
+                    std.debug.print("Socket write error: {}\n", .{err});
+                    continue;
+                };
                 if (resp.body) |resp_body| {
-                    _ = try Socket.write(socket_acceptor, resp_body);
+                    _ = Socket.write_all(socket_acceptor, resp_body) catch |err| {
+                        std.debug.print("Socket write error: {}\n", .{err});
+                        continue;
+                    };
                 }
             } else {
                 continue;
