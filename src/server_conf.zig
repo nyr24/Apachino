@@ -79,7 +79,7 @@ pub const Server = struct {
                 const req = Request.init_from_raw_bytes(request_contents[0..]) catch |err| {
                     switch (err) {
                         RequestError.MethodNotSupported => {
-                            try stderr.print("Request Method is not supported by server", .{});
+                            try stderr.print("Warning: Request Method is not supported by server", .{});
                             std.process.exit(1);
                         },
                         else => {
@@ -88,11 +88,12 @@ pub const Server = struct {
                         },
                     }
                 };
+                defer req.deinit();
 
                 const resp = try Response.init(req, self);
                 defer resp.deinit();
 
-                _ = try Socket.write(socket_acceptor, resp.headers.items);
+                _ = try Socket.write(socket_acceptor, resp.headers);
                 if (resp.body) |resp_body| {
                     _ = try Socket.write(socket_acceptor, resp_body);
                 }

@@ -1,19 +1,33 @@
 {
-    "ip": "127.0.0.1",
-    "port": 8080,
-    "routes": [
-        {
-            "url": "/",
-            "methods": [
-                "GET"
-            ],
-            "resource_path": "res/index.html"
-        },
-        {
-            "url": "/reviews",
-            "methods": [
-                "POST"
-            ]
-        }
-    ]
+  "ip": "127.0.0.1",
+  "port": 8080,
+  "routes": [
+    {
+      "url": "/",
+      "methods": [
+        "GET"
+      ],
+      "resource_path": "res/index.html"
+    },
+    {
+      "url": "/styles.css",
+      "methods": [
+        "GET"
+      ],
+      "resource_path": "res/styles.css"
+    },
+    {
+      "url": "/script.js",
+      "methods": [
+        "GET"
+      ],
+      "resource_path": "res/script.js"
+    },
+    {
+      "url": "/reviews",
+      "methods": [
+        "POST"
+      ]
+    }
+  ]
 }
