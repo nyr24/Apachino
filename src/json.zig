@@ -17,6 +17,7 @@ pub fn parse_config(contents: []const u8) !JsonParsedRepr {
 }
 
 const JsonField = []const u8;
+
 pub const JsonValueTag = enum {
     String,
     Number,
@@ -66,6 +67,7 @@ const ConfigParseErr = error{
 
 const JsonParseErr = ConfigParseErr;
 
+// TODO: deinit()
 const JsonParser = struct {
     buffer: []const u8,
     curr_ind: usize = 0,

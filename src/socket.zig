@@ -79,12 +79,12 @@ pub const Socket = struct {
 
     pub fn set_read_timeout(socket: socket_t) !void {
         const timeout = posix.timeval{ .tv_sec = 2, .tv_usec = 500_000 };
-        try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, std.mem.toBytes(timeout));
+        try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &std.mem.toBytes(timeout));
     }
 
     pub fn set_write_timeout(socket: socket_t) !void {
         const timeout = posix.timeval{ .tv_sec = 2, .tv_usec = 500_000 };
-        try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDTIMEO, std.mem.toBytes(timeout));
+        try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &std.mem.toBytes(timeout));
     }
 
     pub fn print_address(socket: socket_t) !void {

@@ -70,9 +70,13 @@ pub const Server = struct {
 
         while (true) {
             if (Socket.accept(self.socket_listener)) |socket_acceptor| {
+                Socket.set_read_timeout(socket_acceptor) catch |err| {
+                    std.debug.print("Can't set socketopt RCVTIMEO, {}\n", .{err});
+                };
+                Socket.set_write_timeout(socket_acceptor) catch |err| {
+                    std.debug.print("Can't set socketopt SNDTIMEO, {}\n", .{err});
+                };
                 defer Socket.close(socket_acceptor);
-                Socket.set_read_timeout(socket_acceptor);
-                Socket.set_write_timeout(socket_acceptor);
 
                 var request_contents: [1000]u8 = undefined;
                 _ = Socket.read_all(socket_acceptor, request_contents[0..]) catch |err| {
