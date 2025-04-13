@@ -1,8 +1,8 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
 const HashMap = std.StringHashMap;
-const stderr = std.io.getStdErr().writer();
 const allocator = @import("env.zig").allocator;
+const io = @import("io.zig");
 
 const server = @import("server_conf.zig");
 const ServerConf = server.ServerConf;
@@ -81,6 +81,7 @@ const JsonParser = struct {
         self.skip_ws(true);
         if (!self.check_curr_ch('{', true)) {
             self.throw_unexpected_token("expected a '{' symbol as opening of json table");
+            unreachable;
         }
 
         const json_parsed = self.parse_json_table();
@@ -126,6 +127,7 @@ const JsonParser = struct {
                             return non_null;
                         } else {
                             self.throw_unexpected_token("maybe you mean true?");
+                            unreachable;
                         }
                     } else {
                         const bool_val = self.parse_json_bool(.False);
@@ -133,6 +135,7 @@ const JsonParser = struct {
                             return non_null;
                         } else {
                             self.throw_unexpected_token("maybe you mean false?");
+                            unreachable;
                         }
                     }
                 } else if (JsonParser.is_null_start(ch)) {
@@ -141,6 +144,7 @@ const JsonParser = struct {
                         return truly_null;
                     } else {
                         self.throw_unexpected_token("maybe you mean null?");
+                        unreachable;
                     }
                 } else if (JsonParser.is_undefined_start(ch)) {
                     const undef_val = self.parse_json_undefined();
@@ -148,6 +152,7 @@ const JsonParser = struct {
                         return truly_undef;
                     } else {
                         self.throw_unexpected_token("maybe you mean undefined?");
+                        unreachable;
                     }
                 }
             },
@@ -213,6 +218,7 @@ const JsonParser = struct {
         self.skip_ws(true);
         if (!self.check_curr_ch(':', true)) {
             self.throw_unexpected_token("expected ':' after field declaration");
+            unreachable;
         }
 
         return str_literal;
@@ -227,6 +233,7 @@ const JsonParser = struct {
     fn parse_json_str_literal(self: *JsonParser) []const u8 {
         if (!self.check_curr_ch('\"', true)) {
             self.throw_unexpected_token(null);
+            unreachable;
         }
 
         const str_start: usize = self.curr_ind;
@@ -240,6 +247,7 @@ const JsonParser = struct {
 
         if (!self.check_curr_ch('\"', true)) {
             self.throw_unexpected_token("expected '\"' at the end of json string");
+            unreachable;
         }
 
         return str;
@@ -254,11 +262,12 @@ const JsonParser = struct {
         } else |err| {
             switch (err) {
                 error.Overflow => {
-                    std.debug.print("Overflow, when trying to parse integer: {s}", .{self.buffer[start_ind..self.curr_ind]});
+                    io.error_log("Overflow, when trying to parse integer: {s}", .{self.buffer[start_ind..self.curr_ind]});
                     std.process.exit(1);
                 },
                 error.InvalidCharacter => {
                     self.throw_unexpected_token("expected a value of Number type");
+                    unreachable;
                 },
                 else => unreachable,
             }
@@ -328,10 +337,12 @@ const JsonParser = struct {
             if (self.is_end_reached() and throw_if_end_reached) {
                 self.curr_ind = start_ind;
                 self.throw_end_reached_early(expected_seq);
+                unreachable;
             } else {
                 self.curr_ind = start_ind;
                 if (throw_if_not_match) {
                     self.throw_unexpected_token(expected_seq);
+                    unreachable;
                 }
                 return null;
             }
@@ -407,34 +418,25 @@ const JsonParser = struct {
         return self.curr_ind >= self.buffer.len;
     }
 
-    inline fn throw_end_reached_early(self: JsonParser, expect_message: ?[]const u8) void {
+    fn throw_end_reached_early(self: JsonParser, expect_message: ?[]const u8) void {
         if (expect_message) |expect_message_no_null| {
-            stderr.print("End of config is reached early, line {d},\n\t{s}", .{ self.curr_line_n, expect_message_no_null }) catch unreachable;
+            io.error_log("End of config is reached early, line {d},\n\t{s}", .{ self.curr_line_n, expect_message_no_null });
         } else {
-            stderr.print("End of config is reached early, line {d}", .{self.curr_line_n}) catch unreachable;
+            io.error_log("End of config is reached early, line {d}", .{self.curr_line_n});
         }
         std.process.exit(1);
     }
 
-    inline fn throw_unexpected_token(self: *JsonParser, expect_message: ?[]const u8) void {
+    fn throw_unexpected_token(self: *JsonParser, expect_message: ?[]const u8) void {
         const start_ind = self.curr_ind;
         self.match_any_for_callback(std.ascii.isAlphanumeric, false);
         const unexpected_seq = self.buffer[start_ind..self.curr_ind];
 
         if (expect_message) |expect_message_no_null| {
-            stderr.print("Unexpected token at line {d}: {s},\n\t{s}", .{ self.curr_line_n, unexpected_seq, expect_message_no_null }) catch unreachable;
+            io.error_log("Unexpected token at line {d}: {s},\n\t{s}", .{ self.curr_line_n, unexpected_seq, expect_message_no_null });
         } else {
-            stderr.print("Unexpected token at line {d}: {s}", .{ self.curr_line_n, unexpected_seq }) catch unreachable;
+            io.error_log("Unexpected token at line {d}: {s}", .{ self.curr_line_n, unexpected_seq });
         }
         std.process.exit(1);
-    }
-
-    inline fn debug_print_curr(self: JsonParser) void {
-        std.debug.print("{c}\n", .{self.get_curr_ch()});
-    }
-
-    inline fn debug_print_seq(self: JsonParser, offset: usize) void {
-        const end_ind = self.curr_ind + offset;
-        std.debug.print("{s}\n", .{self.buffer[self.curr_ind..end_ind]});
     }
 };

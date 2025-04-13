@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const StaticStringMap = std.static_string_map.StaticStringMap;
 const Map = std.AutoHashMap;
 const StringMap = std.StringHashMap;
@@ -273,7 +274,7 @@ fn get_mime_type_from_token(token: []const u8, req: *Request) void {
             } else |err| {
                 switch (err) {
                     else => {
-                        std.debug.print("Error while appending into array\n", .{});
+                        io.error_log("Error while appending into array\n", .{});
                         return;
                     },
                 }
@@ -289,5 +290,5 @@ fn is_token_request(token: []const u8) bool {
 
 fn log_token_dbg(token: []const u8, req: *Request) void {
     _ = req;
-    std.debug.print("token: {s}\n", .{token[0..]});
+    io.error_log("token: {s}\n", .{token[0..]});
 }

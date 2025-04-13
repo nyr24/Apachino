@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 const net = std.net;
 const posix = std.posix;
 const socket_t = posix.socket_t;
@@ -15,7 +16,7 @@ pub const Socket = struct {
         var client_address_len: posix.socklen_t = @sizeOf(net.Address);
 
         const socket_acceptor = posix.accept(listener.socket, &client_address.any, &client_address_len, 0) catch |err| {
-            std.debug.print("Error when accepting connection: {}\n", .{err});
+            io.error_log("Error when accepting connection: {}\n", .{err});
             return null;
         };
 
@@ -92,7 +93,7 @@ pub const Socket = struct {
         var len: posix.socklen_t = @sizeOf(net.Address);
 
         try posix.getsockname(socket, &address.any, &len);
-        std.debug.print("Server is listening on {}\n", .{address});
+        io.error_log("Server is listening on {}\n", .{address});
     }
 };
 

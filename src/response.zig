@@ -61,17 +61,17 @@ pub const Response = struct {
                 self.body = io.read_file(allocator, path_non_null) catch |err| {
                     switch (err) {
                         OpenError.FileNotFound => {
-                            std.debug.print("Can't read file: was not found at: {s}\n", .{path_non_null});
+                            io.error_log("Can't read file: was not found at: {s}\n", .{path_non_null});
                             self.status = StatusType.get_status(.NotFound);
                             return;
                         },
                         OpenError.AccessDenied => {
-                            std.debug.print("Can't read file: permission denied at: {s}\n", .{path_non_null});
+                            io.error_log("Can't read file: permission denied at: {s}\n", .{path_non_null});
                             self.status = StatusType.get_status(.NotFound);
                             return;
                         },
                         else => {
-                            std.debug.print("Can't read file: unexpected error occurred at: {s}\n", .{path_non_null});
+                            io.error_log("Can't read file: unexpected error occurred at: {s}\n", .{path_non_null});
                             self.status = StatusType.get_status(.NotFound);
                             return;
                         },

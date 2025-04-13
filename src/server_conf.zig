@@ -1,10 +1,8 @@
 const std = @import("std");
-const writer = std.io.GenericWriter(.{}, .{}, .{}){};
+const env = @import("env.zig");
 const posix = std.posix;
-const stderr = std.io.getStdErr().writer();
 const ArrayList = std.ArrayList;
 const HashMap = std.StringHashMap;
-const env = @import("env.zig");
 const allocator = env.allocator;
 
 const io = @import("io.zig");
@@ -71,27 +69,27 @@ pub const Server = struct {
         while (true) {
             if (Socket.accept(self.socket_listener)) |socket_acceptor| {
                 Socket.set_read_timeout(socket_acceptor) catch |err| {
-                    std.debug.print("Can't set socketopt RCVTIMEO, {}\n", .{err});
+                    io.error_log("Can't set socketopt RCVTIMEO, {}\n", .{err});
                 };
                 Socket.set_write_timeout(socket_acceptor) catch |err| {
-                    std.debug.print("Can't set socketopt SNDTIMEO, {}\n", .{err});
+                    io.error_log("Can't set socketopt SNDTIMEO, {}\n", .{err});
                 };
                 defer Socket.close(socket_acceptor);
 
                 var request_contents: [1000]u8 = undefined;
                 _ = Socket.read_all(socket_acceptor, request_contents[0..]) catch |err| {
-                    std.debug.print("Socket read error: {}\n", .{err});
+                    io.error_log("Socket read error: {}\n", .{err});
                     continue;
                 };
 
                 const req = Request.init_from_raw_bytes(request_contents[0..]) catch |err| {
                     switch (err) {
                         RequestError.MethodNotSupported => {
-                            try stderr.print("Warning: Request Method is not supported by server", .{});
+                            io.error_log("Warning: Request Method is not supported by server", .{});
                             std.process.exit(1);
                         },
                         else => {
-                            try stderr.print("Unexpected error occurs, finishing process", .{});
+                            io.error_log("Unexpected error occurs, finishing process", .{});
                             std.process.exit(1);
                         },
                     }
@@ -102,12 +100,12 @@ pub const Server = struct {
                 defer resp.deinit();
 
                 _ = Socket.write_all(socket_acceptor, resp.headers) catch |err| {
-                    std.debug.print("Socket write error: {}\n", .{err});
+                    io.error_log("Socket write error: {}\n", .{err});
                     continue;
                 };
                 if (resp.body) |resp_body| {
                     _ = Socket.write_all(socket_acceptor, resp_body) catch |err| {
-                        std.debug.print("Socket write error: {}\n", .{err});
+                        io.error_log("Socket write error: {}\n", .{err});
                         continue;
                     };
                 }
@@ -133,11 +131,11 @@ pub const Server = struct {
             } else |err| {
                 switch (err) {
                     error.Overflow => {
-                        stderr.print("Configuration error: can't parse Integer value from field 'ip', overflow occurs, value is: {s}", .{ip_str}) catch unreachable;
+                        io.error_log("Configuration error: can't parse Integer value from field 'ip', overflow occurs, value is: {s}", .{ip_str});
                         std.process.exit(1);
                     },
                     error.InvalidCharacter => {
-                        stderr.print("Configuration error: can't parse Integer value from field 'ip', value is: {s}", .{ip_str}) catch unreachable;
+                        io.error_log("Configuration error: can't parse Integer value from field 'ip', value is: {s}", .{});
                         std.process.exit(1);
                     },
                     else => unreachable,
@@ -195,7 +193,7 @@ pub const Server = struct {
         if (RequestMethodMap.has(method_str)) {
             return method_str;
         } else {
-            stderr.print("Configuration warning: Unknown request method: {s}", .{method_str}) catch unreachable;
+            io.error_log("Configuration warning: Unknown request method: {s}", .{method_str});
             return null;
         }
     }
@@ -290,14 +288,14 @@ pub const Server = struct {
     }
 
     fn config_type_err(field: []const u8, expected_type: JsonValueTag, found_type: [:0]const u8, proper_usage_example: []const u8) void {
-        stderr.print("Configuration error: field '{s}' was expected to be of type {any}, found: {s} type\nExample of proper usage: {s}\n", .{
+        io.error_log("Configuration error: field '{s}' was expected to be of type {any}, found: {s} type\nExample of proper usage: {s}\n", .{
             field, expected_type, found_type, proper_usage_example,
-        }) catch unreachable;
+        });
         std.process.exit(1);
     }
 
     fn config_empty_field_err(field: []const u8) void {
-        stderr.print("Configuration error: Obligatory field is empty - '{s}'\n", .{field}) catch unreachable;
+        io.error_log("Configuration error: Obligatory field is empty - '{s}'\n", .{field});
         std.process.exit(1);
     }
 
