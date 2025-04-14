@@ -1,7 +1,6 @@
 const std = @import("std");
 const env = @import("env.zig");
 const Writer = std.fs.File.Writer;
-const stdout = std.io.getStdOut().writer();
 
 pub fn read_file(allocator: std.mem.Allocator, path_rel: []const u8) ![]u8 {
     const cwd = std.fs.cwd();
@@ -12,5 +11,9 @@ pub fn read_file(allocator: std.mem.Allocator, path_rel: []const u8) ![]u8 {
 }
 
 pub fn error_log(comptime format: []const u8, args: anytype) void {
-    stdout.print(format, args) catch {};
+    const stderr = std.io.getStdErr().writer();
+    var bw = std.io.BufferedWriter(100, @TypeOf(stderr)){
+        .unbuffered_writer = stderr,
+    };
+    bw.writer().print(format, args) catch {};
 }

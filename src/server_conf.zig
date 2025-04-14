@@ -69,16 +69,16 @@ pub const Server = struct {
         while (true) {
             if (Socket.accept(self.socket_listener)) |socket_acceptor| {
                 Socket.set_read_timeout(socket_acceptor) catch |err| {
-                    io.error_log("Can't set socketopt RCVTIMEO, {}\n", .{err});
+                    io.error_log("Can't set socketopt RCVTIMEO, {any}\n", .{err});
                 };
                 Socket.set_write_timeout(socket_acceptor) catch |err| {
-                    io.error_log("Can't set socketopt SNDTIMEO, {}\n", .{err});
+                    io.error_log("Can't set socketopt SNDTIMEO, {any}\n", .{err});
                 };
                 defer Socket.close(socket_acceptor);
 
                 var request_contents: [1000]u8 = undefined;
                 _ = Socket.read_all(socket_acceptor, request_contents[0..]) catch |err| {
-                    io.error_log("Socket read error: {}\n", .{err});
+                    io.error_log("Socket read error: {any}\n", .{err});
                     continue;
                 };
 
@@ -100,12 +100,12 @@ pub const Server = struct {
                 defer resp.deinit();
 
                 _ = Socket.write_all(socket_acceptor, resp.headers) catch |err| {
-                    io.error_log("Socket write error: {}\n", .{err});
+                    io.error_log("Socket write error: {any}\n", .{err});
                     continue;
                 };
                 if (resp.body) |resp_body| {
                     _ = Socket.write_all(socket_acceptor, resp_body) catch |err| {
-                        io.error_log("Socket write error: {}\n", .{err});
+                        io.error_log("Socket write error: {any}\n", .{err});
                         continue;
                     };
                 }
@@ -135,7 +135,7 @@ pub const Server = struct {
                         std.process.exit(1);
                     },
                     error.InvalidCharacter => {
-                        io.error_log("Configuration error: can't parse Integer value from field 'ip', value is: {s}", .{});
+                        io.error_log("Configuration error: can't parse Integer value from field 'ip', value is: {s}", .{ip_str});
                         std.process.exit(1);
                     },
                     else => unreachable,
