@@ -4,7 +4,6 @@ const StaticStringMap = std.static_string_map.StaticStringMap;
 const Map = std.AutoHashMap;
 const StringMap = std.StringHashMap;
 const ArrayList = std.ArrayList;
-const String = std.ArrayList(u8);
 const Connection = std.net.Server.Connection;
 const allocator = @import("env.zig").allocator;
 const response = @import("response.zig");
@@ -150,6 +149,7 @@ pub const RequestParser = struct {
                     }
                 }
 
+                _ = self.skip_ws_but_not_newline();
                 const need_token = self.slice_token(false);
                 curr_token_n += 1;
                 inner_map_entry.value_ptr.*(need_token, req);
@@ -184,7 +184,7 @@ pub const RequestParser = struct {
         var outer_map = TokenOuterMap.init(allocator);
 
         try outer_map.put(RequestMapKey, map_for_line_0);
-        try outer_map.put("Accept", map_for_line_accept);
+        try outer_map.put("Accept:", map_for_line_accept);
 
         return outer_map;
     }

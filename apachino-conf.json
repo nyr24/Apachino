@@ -1,27 +1,28 @@
 {
     "ip": "127.0.0.1",
     "port": 8080,
+    "resource_base_path": "./res/",
     "routes": [
         {
             "url": "/",
             "methods": [
                 "GET"
             ],
-            "resource_path": "res/index.html"
+            "resource_path": "index.html"
         },
         {
             "url": "/styles.css",
             "methods": [
                 "GET"
             ],
-            "resource_path": "res/styles.css"
+            "resource_path": "styles.css"
         },
         {
             "url": "/script.js",
             "methods": [
                 "GET"
             ],
-            "resource_path": "res/script.js"
+            "resource_path": "script.js"
         },
         {
             "url": "/reviews",

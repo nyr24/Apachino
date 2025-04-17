@@ -49,34 +49,71 @@ pub const Response = struct {
 
     fn set_body(self: *Response, req: Request, server_conf: Server) void {
         if (server_conf.routes.get(req.url)) |route| {
-            if (route.resource_path) |path_non_null| {
-                const mime_type_enum = Response.extract_mime_type_from_extension(path_non_null);
+            if (route.resource_path) |resource_path| {
+                const mime_type_enum = Response.extract_mime_type_from_extension(resource_path);
                 if (mime_type_enum) |mime_type_unwrapped| {
                     self.mime_type = MimeType.to_str(mime_type_unwrapped);
+                    if (!compare_mime_type_to_req(mime_type_unwrapped, req.mime_types)) {
+                        io.error_log("Response error: found mime type is not found inside allowed mime types from request\n\tFound: {any}\n", .{mime_type_unwrapped});
+                        self.status = StatusType.get_status(.NotFound);
+                        return;
+                    }
                 } else {
                     // default mime type assigned
                     self.mime_type = MimeType.to_str(.application_octet_stream);
                 }
                 self.status = StatusType.get_status(.Ok);
-                self.body = io.read_file(allocator, path_non_null) catch |err| {
-                    switch (err) {
-                        OpenError.FileNotFound => {
-                            io.error_log("Can't read file: was not found at: {s}\n", .{path_non_null});
-                            self.status = StatusType.get_status(.NotFound);
-                            return;
-                        },
-                        OpenError.AccessDenied => {
-                            io.error_log("Can't read file: permission denied at: {s}\n", .{path_non_null});
-                            self.status = StatusType.get_status(.NotFound);
-                            return;
-                        },
-                        else => {
-                            io.error_log("Can't read file: unexpected error occurred at: {s}\n", .{path_non_null});
-                            self.status = StatusType.get_status(.NotFound);
-                            return;
-                        },
-                    }
-                };
+
+                if (server_conf.res_base_path) |base_path| {
+                    var concat_path = ArrayList(u8).initCapacity(allocator, base_path.len + resource_path.len) catch {
+                        std.debug.print("Allocation failed", .{});
+                        std.process.exit(1);
+                    };
+                    defer concat_path.deinit();
+
+                    concat_path.appendSlice(base_path) catch unreachable;
+                    concat_path.appendSlice(resource_path) catch unreachable;
+
+                    self.body = io.read_file(allocator, concat_path.items) catch |err| {
+                        switch (err) {
+                            OpenError.FileNotFound => {
+                                io.error_log("Can't read file: was not found at: {s}\n", .{concat_path.items});
+                                self.status = StatusType.get_status(.NotFound);
+                                return;
+                            },
+                            OpenError.AccessDenied => {
+                                io.error_log("Can't read file: permission denied at: {s}\n", .{concat_path.items});
+                                self.status = StatusType.get_status(.NotFound);
+                                return;
+                            },
+                            else => {
+                                io.error_log("Can't read file: unexpected error occurred at: {s}\n", .{concat_path.items});
+                                self.status = StatusType.get_status(.NotFound);
+                                return;
+                            },
+                        }
+                    };
+                } else {
+                    self.body = io.read_file(allocator, resource_path) catch |err| {
+                        switch (err) {
+                            OpenError.FileNotFound => {
+                                io.error_log("Can't read file: was not found at: {s}\n", .{resource_path});
+                                self.status = StatusType.get_status(.NotFound);
+                                return;
+                            },
+                            OpenError.AccessDenied => {
+                                io.error_log("Can't read file: permission denied at: {s}\n", .{resource_path});
+                                self.status = StatusType.get_status(.NotFound);
+                                return;
+                            },
+                            else => {
+                                io.error_log("Can't read file: unexpected error occurred at: {s}\n", .{resource_path});
+                                self.status = StatusType.get_status(.NotFound);
+                                return;
+                            },
+                        }
+                    };
+                }
             } else {
                 self.status = StatusType.get_status(.NotFound);
             }
@@ -97,6 +134,15 @@ pub const Response = struct {
 
         const extension = resource_path[last_dot_ind..];
         return MimeType.MapFromExtension.get(extension);
+    }
+
+    fn compare_mime_type_to_req(found_mime_type: MimeType, req_allowed_mime_types: std.ArrayList(MimeType)) bool {
+        for (req_allowed_mime_types.items) |req_mime| {
+            if (req_mime == .all or req_mime == found_mime_type) {
+                return true;
+            }
+        }
+        return false;
     }
 };
 
@@ -154,6 +200,8 @@ const Header = struct {
 
 // https://www.iana.org/assignments/media-types/media-types.xhtml#model
 pub const MimeType = enum {
+    all,
+
     text,
     text_html,
     text_plain,
@@ -203,6 +251,7 @@ pub const MimeType = enum {
 
     pub fn to_str(self: MimeType) []const u8 {
         switch (self) {
+            .all => return "*/*",
             .text => return "text/*",
             .text_html => return "text/html",
             .text_plain => return "text/plain",
@@ -253,6 +302,7 @@ pub const MimeType = enum {
     }
 
     pub const MapFromMimeStr = StaticStrMap(MimeType).initComptime(.{
+        .{ "*/*", .all },
         .{ "text/*", .text },
         .{ "text/html", .text_html },
         .{ "text/plain", .text_plain },

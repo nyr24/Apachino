@@ -21,13 +21,16 @@ const socket = @import("socket.zig");
 const Listener = socket.Listener;
 const Socket = socket.Socket;
 
-pub const Route = struct {
+const JsonExample = struct {
     const MULT_ROUTES_JSON_EXAMPLE: []const u8 = "[{ \"url\": ..., methods: [\"GET\", ...], resource_path: \"path_to_index.html\"  }]";
     const SINGLE_ROUTE_JSON_EXAMPLE: []const u8 = "{ \"url\": ..., methods: [\"GET\", ...], resource_path: \"path_to_index.html\"  }";
     const URL_JSON_EXAMPLE: []const u8 = "/page1";
     const RESOURCE_PATH_JSON_EXAMPLE: []const u8 = "/path_to_index.html";
     const METHODS_EXAMPLE: []const u8 = "[\"GET\", ...]";
+    const RESOURCE_BASE_PATH: []const u8 = "\"resource_base_path\": \"./res\"";
+};
 
+pub const Route = struct {
     url: []const u8 = undefined,
     methods: HashMap(RequestMethod),
     resource_path: ?[]const u8 = null,
@@ -48,6 +51,7 @@ pub const Server = struct {
     port: u16 = Server.DEFAULT_PORT,
     ip: [4]u8 = Server.DEFAULT_IP,
     socket_listener: Listener = undefined,
+    res_base_path: ?[]const u8 = null,
     routes: HashMap(Route),
 
     pub fn init(config_file_contents: []const u8) !Server {
@@ -57,9 +61,18 @@ pub const Server = struct {
         server_conf.ip = parse_ip(parsed_json);
         server_conf.port = parse_port(parsed_json);
         server_conf.socket_listener = try Listener.init(server_conf);
+        server_conf.res_base_path = parse_base_path(parsed_json);
         try server_conf.parse_routes(parsed_json);
 
         return server_conf;
+    }
+
+    pub fn deinit(self: *Server) void {
+        var routes_iter = self.routes.valueIterator();
+        while (routes_iter.next()) |route| {
+            route.*.deinit();
+        }
+        self.routes.deinit();
     }
 
     pub fn listen(self: Server) !void {
@@ -153,17 +166,33 @@ pub const Server = struct {
     }
 
     fn parse_routes(self: *Server, parsed_json: JsonParsedRepr) !void {
-        const routes_arr = unwrap_json_val_arr(parsed_json.get("routes"), null, "routes", Route.MULT_ROUTES_JSON_EXAMPLE);
+        const routes_arr = unwrap_json_val_arr(parsed_json.get("routes"), null, "routes", JsonExample.MULT_ROUTES_JSON_EXAMPLE);
         for (routes_arr.items) |route_as_json| {
             try self.add_route(route_as_json);
         }
     }
 
+    fn parse_base_path(parsed_json: JsonParsedRepr) ?[]const u8 {
+        const res_base_path = parsed_json.get("resource_base_path");
+        if (res_base_path) |res_base_non_null| {
+            switch (res_base_non_null) {
+                .String => |res_base_unwrapped| {
+                    return res_base_unwrapped;
+                },
+                else => {
+                    config_type_err("resource_base_path", .String, @tagName(res_base_non_null), JsonExample.RESOURCE_BASE_PATH);
+                    return null;
+                },
+            }
+        }
+        return null;
+    }
+
     fn add_route(self: *Server, route_json_repr: JsonValue) !void {
         var route = try Route.init();
-        const route_as_table = unwrap_json_val_table(route_json_repr, null, "route", Route.SINGLE_ROUTE_JSON_EXAMPLE);
-        const route_url = unwrap_json_val_string(route_as_table.get("url"), null, "url", Route.URL_JSON_EXAMPLE);
-        const route_methods = unwrap_json_val_arr(route_as_table.get("methods"), null, "methods", Route.METHODS_EXAMPLE);
+        const route_as_table = unwrap_json_val_table(route_json_repr, null, "route", JsonExample.SINGLE_ROUTE_JSON_EXAMPLE);
+        const route_url = unwrap_json_val_string(route_as_table.get("url"), null, "url", JsonExample.URL_JSON_EXAMPLE);
+        const route_methods = unwrap_json_val_arr(route_as_table.get("methods"), null, "methods", JsonExample.METHODS_EXAMPLE);
         const route_resource_path_nullable = route_as_table.get("resource_path");
 
         route.url = route_url;
@@ -189,7 +218,7 @@ pub const Server = struct {
     }
 
     fn parse_route_method(method_json: JsonValue) ?[]const u8 {
-        const method_str = unwrap_json_val_string(method_json, null, "item of methods []", Route.METHODS_EXAMPLE);
+        const method_str = unwrap_json_val_string(method_json, null, "item of methods []", JsonExample.METHODS_EXAMPLE);
         if (RequestMethodMap.has(method_str)) {
             return method_str;
         } else {
@@ -297,13 +326,5 @@ pub const Server = struct {
     fn config_empty_field_err(field: []const u8) void {
         io.error_log("Configuration error: Obligatory field is empty - '{s}'\n", .{field});
         std.process.exit(1);
-    }
-
-    pub fn deinit(self: *Server) void {
-        var routes_iter = self.routes.valueIterator();
-        while (routes_iter.next()) |route| {
-            route.*.deinit();
-        }
-        self.routes.deinit();
     }
 };
