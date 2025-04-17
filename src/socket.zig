@@ -93,7 +93,7 @@ pub const Socket = struct {
         var len: posix.socklen_t = @sizeOf(net.Address);
 
         try posix.getsockname(socket, &address.any, &len);
-        io.error_log("Server is listening on {}\n", .{address});
+        io.log("Server is listening on {}\n", .{address});
     }
 };
 

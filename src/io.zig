@@ -16,4 +16,14 @@ pub fn error_log(comptime format: []const u8, args: anytype) void {
         .unbuffered_writer = stderr,
     };
     bw.writer().print(format, args) catch {};
+    bw.flush() catch {};
+}
+
+pub fn log(comptime format: []const u8, args: anytype) void {
+    const stderr = std.io.getStdOut().writer();
+    var bw = std.io.BufferedWriter(100, @TypeOf(stderr)){
+        .unbuffered_writer = stderr,
+    };
+    bw.writer().print(format, args) catch {};
+    bw.flush() catch {};
 }

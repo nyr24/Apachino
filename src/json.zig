@@ -1,7 +1,7 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
 const HashMap = std.StringHashMap;
-const allocator = @import("env.zig").allocator;
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const io = @import("io.zig");
 
 const server = @import("server_conf.zig");
@@ -12,6 +12,7 @@ const RequestMethod = @import("request.zig").Method;
 // entry point for config parsing
 pub fn parse_config(contents: []const u8) !JsonParsedRepr {
     var conf_parser = JsonParser.init(contents);
+    defer conf_parser.deinit();
     const parsed_json = try conf_parser.parse();
     return parsed_json;
 }
@@ -67,14 +68,21 @@ const ConfigParseErr = error{
 
 const JsonParseErr = ConfigParseErr;
 
-// TODO: deinit()
 const JsonParser = struct {
     buffer: []const u8,
     curr_ind: usize = 0,
     curr_line_n: usize = 0,
+    aa: std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
 
     pub fn init(buffer: []const u8) JsonParser {
-        return JsonParser{ .buffer = buffer };
+        var aa = std.heap.ArenaAllocator.init(gpa.allocator());
+        const allocator = aa.allocator();
+        return JsonParser{ .buffer = buffer, .aa = aa, .allocator = allocator };
+    }
+
+    pub fn deinit(self: JsonParser) void {
+        self.aa.deinit();
     }
 
     pub fn parse(self: *JsonParser) JsonParseErr!JsonParsedRepr {
@@ -162,7 +170,7 @@ const JsonParser = struct {
     }
 
     fn parse_json_table(self: *JsonParser) JsonValue {
-        var json_table = JsonValue{ .Table = JsonTable.init(allocator) };
+        var json_table = JsonValue{ .Table = JsonTable.init(self.allocator) };
 
         while (true) {
             self.skip_ws(true);
@@ -189,7 +197,7 @@ const JsonParser = struct {
     }
 
     fn parse_json_arr(self: *JsonParser) JsonValue {
-        var json_arr = JsonValue{ .Array = JsonArray.initCapacity(allocator, 5) catch unreachable };
+        var json_arr = JsonValue{ .Array = JsonArray.initCapacity(self.allocator, 5) catch unreachable };
 
         while (true) {
             self.skip_ws(true);

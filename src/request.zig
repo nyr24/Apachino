@@ -290,5 +290,5 @@ fn is_token_request(token: []const u8) bool {
 
 fn log_token_dbg(token: []const u8, req: *Request) void {
     _ = req;
-    io.error_log("token: {s}\n", .{token[0..]});
+    std.debug.print("token: {s}\n", .{token[0..]});
 }
